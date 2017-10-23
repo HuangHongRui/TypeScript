@@ -238,7 +238,7 @@ namespace ts {
 
         getCompletionsAtPosition(fileName: string, position: number): CompletionInfo;
         // "options" is optional only for backwards-compatibility
-        getCompletionEntryDetails(fileName: string, position: number, entryName: string, options?: FormatCodeOptions | FormatCodeSettings): CompletionEntryDetails;
+        getCompletionEntryDetails(fileName: string, position: number, entryName: string | CompletionEntryIdentifier, options?: FormatCodeOptions | FormatCodeSettings): CompletionEntryDetails;
         getCompletionEntrySymbol(fileName: string, position: number, entryName: string): Symbol;
 
         getQuickInfoAtPosition(fileName: string, position: number): QuickInfo;
@@ -696,6 +696,12 @@ namespace ts {
          */
         replacementSpan?: TextSpan;
         hasAction?: true;
+        source?: string;
+    }
+
+    export interface CompletionEntryIdentifier {
+        name: string;
+        source: string;
     }
 
     export interface CompletionEntryDetails {
@@ -706,6 +712,7 @@ namespace ts {
         documentation: SymbolDisplayPart[];
         tags: JSDocTagInfo[];
         codeActions?: CodeAction[];
+        source?: SymbolDisplayPart[];
     }
 
     export interface OutliningSpan {

@@ -100,7 +100,7 @@ namespace ts.Completions {
     function getJavaScriptCompletionEntries(
         sourceFile: SourceFile,
         position: number,
-        uniqueNames: Map<true>,
+        uniqueNames: Map<{}>,
         target: ScriptTarget,
         entries: Push<CompletionEntry>): void {
         getNameTable(sourceFile).forEach((pos, name) => {
@@ -127,7 +127,15 @@ namespace ts.Completions {
         });
     }
 
-    function createCompletionEntry(symbol: Symbol, location: Node, performCharacterChecks: boolean, typeChecker: TypeChecker, target: ScriptTarget, allowStringLiteral: boolean): CompletionEntry {
+    function createCompletionEntry(
+        symbol: Symbol,
+        location: Node,
+        performCharacterChecks: boolean,
+        typeChecker: TypeChecker,
+        target: ScriptTarget,
+        allowStringLiteral: boolean,
+        origin: SymbolOriginInfo | undefined,
+    ): CompletionEntry | undefined {
         // Try to get a valid display name for this symbol, if we could not find one, then ignore it.
         // We would like to only show things that can be added after a dot, so for instance numeric properties can
         // not be accessed with a dot (a.1 <- invalid)
@@ -149,6 +157,7 @@ namespace ts.Completions {
             kind: SymbolDisplay.getSymbolKind(typeChecker, symbol, location),
             kindModifiers: SymbolDisplay.getSymbolModifiers(symbol),
             sortText: "0",
+            source: origin && origin.moduleSymbol.name,
         };
     }
 
@@ -162,27 +171,40 @@ namespace ts.Completions {
         log: Log,
         allowStringLiteral: boolean,
         symbolToOriginInfoMap?: SymbolOriginInfoMap,
-    ): Map<true> {
+    ): Map<{}> {
         const start = timestamp();
-        const uniqueNames = createMap<true>();
+        // Name -> map from module symbol id (or -1 for not from a module) to name
+        const uniques = createMap<true[]>();
         if (symbols) {
             for (const symbol of symbols) {
-                const entry = createCompletionEntry(symbol, location, performCharacterChecks, typeChecker, target, allowStringLiteral);
-                if (entry) {
-                    const id = entry.name;
-                    if (!uniqueNames.has(id)) {
-                        if (symbolToOriginInfoMap && symbolToOriginInfoMap[getUniqueSymbolId(symbol, typeChecker)]) {
-                            entry.hasAction = true;
-                        }
-                        entries.push(entry);
-                        uniqueNames.set(id, true);
-                    }
+                const origin = symbolToOriginInfoMap && symbolToOriginInfoMap[getUniqueSymbolId(symbol, typeChecker)];
+                const entry = createCompletionEntry(symbol, location, performCharacterChecks, typeChecker, target, allowStringLiteral, origin);
+                if (!entry) {
+                    continue;
                 }
+
+                const id = entry.name;
+                let uniquesForName = uniques.get(id);
+                if (!uniquesForName) {
+                    uniques.set(id, uniquesForName = []);
+                }
+
+                const key = origin ? getSymbolId(origin.moduleSymbol) : -1;
+                if (uniquesForName[key]) {
+                    continue;
+                }
+
+                uniquesForName[key] = true;
+
+                if (origin) {
+                    entry.hasAction = true;
+                }
+                entries.push(entry);
             }
         }
 
         log("getCompletionsAtPosition: getCompletionEntriesFromSymbols: " + (timestamp() - start));
-        return uniqueNames;
+        return uniques;
     }
 
     function getStringLiteralCompletionEntries(sourceFile: SourceFile, position: number, typeChecker: TypeChecker, compilerOptions: CompilerOptions, host: LanguageServiceHost, log: Log): CompletionInfo | undefined {
@@ -335,11 +357,12 @@ namespace ts.Completions {
         compilerOptions: CompilerOptions,
         sourceFile: SourceFile,
         position: number,
-        name: string,
+        completionEntry: string | CompletionEntryIdentifier,
         allSourceFiles: ReadonlyArray<SourceFile>,
         host: LanguageServiceHost,
         rulesProvider: formatting.RulesProvider,
     ): CompletionEntryDetails {
+        const name = typeof completionEntry === "string" ? completionEntry : completionEntry.name;
 
         // Compute all the completion symbols again.
         const completionData = getCompletionData(typeChecker, log, sourceFile, position, allSourceFiles);
@@ -350,7 +373,18 @@ namespace ts.Completions {
             // We don't need to perform character checks here because we're only comparing the
             // name against 'entryName' (which is known to be good), not building a new
             // completion entry.
-            const symbol = find(symbols, s => getCompletionEntryDisplayNameForSymbol(s, compilerOptions.target, /*performCharacterChecks*/ false, allowStringLiteral) === name);
+            const symbol = find(symbols, s => {
+                const x = getCompletionEntryDisplayNameForSymbol(s, compilerOptions.target, /*performCharacterChecks*/ false, allowStringLiteral) === name;
+                if (x) { //name
+                    const origin = symbolToOriginInfoMap[getSymbolId(s)];
+                    if (typeof completionEntry === "string") { //ternary
+                        return origin === undefined;
+                    }
+                    else {
+                        return origin !== undefined && origin.moduleSymbol.name === completionEntry.source;
+                    }
+                }
+            });
 
             if (symbol) {
                 const codeActions = getCompletionEntryCodeActions(symbolToOriginInfoMap, symbol, typeChecker, host, compilerOptions, sourceFile, rulesProvider);
@@ -361,11 +395,7 @@ namespace ts.Completions {
         }
 
         // Didn't find a symbol with this name.  See if we can find a keyword instead.
-        const keywordCompletion = forEach(
-            getKeywordCompletions(KeywordCompletionFilters.None),
-            c => c.name === name
-        );
-        if (keywordCompletion) {
+        if (typeof completionEntry === "string" && some(getKeywordCompletions(KeywordCompletionFilters.None), c => c.name === name)) {
             return {
                 name,
                 kind: ScriptElementKind.keyword,
